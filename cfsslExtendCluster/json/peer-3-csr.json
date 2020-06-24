@@ -1,0 +1,19 @@
+{
+    "CN": "ETCD-peer-3",
+    "hosts": [
+      "172.17.174.42"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "Beijing",
+            "L": "Beijing",
+            "O": "etcd",
+            "OU": "System"
+        }
+    ]
+}

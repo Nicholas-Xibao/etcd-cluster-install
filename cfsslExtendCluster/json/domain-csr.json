@@ -1,0 +1,16 @@
+{
+  "CN": "Private Domain",
+  "key": {
+    "algo": "rsa",
+    "size": 2048
+  },
+  "names": [
+    {
+      "C": "CN",
+      "ST": "Beijing",
+      "L": "Beijing",
+      "O": "PrivateDomain",
+      "OU": "System"
+    }
+  ]
+}

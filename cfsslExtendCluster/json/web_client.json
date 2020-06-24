@@ -1,0 +1,19 @@
+{
+    "CN": "ETCDCTL-Web-Client",
+    "hosts": [
+	"%web_node%"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "Beijing",
+            "L": "Beijing",
+            "O": "etcd",
+            "OU": "System"
+        }
+    ]
+}

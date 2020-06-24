@@ -1,0 +1,365 @@
+#!/bin/bash
+#Program:
+#	扩展集群生成peer和server及client证书
+#author: yinshixiong
+#date: 2020/06/15
+
+. ./createAllCert.sh
+
+function printInfo () {
+    echo -e "\e[1;32m[$(date +%Y-%m-%d' '%H:%M:%S)] [INFO] [$1]\e[0m"
+}
+
+function printError () {
+    echo -e "\e[1;31m[$(date +%Y-%m-%d' '%H:%M:%S)] [ERROR] [$1]\e[0m"
+}
+
+function printWarning () {
+    echo -e "\e[1;33m[$(date +%Y-%m-%d' '%H:%M:%S)] [WARNING] [$1]\e[0m"
+}
+
+function printFatal () {
+    echo -e "\e[1;41m[$(date +%Y-%m-%d' '%H:%M:%S)] [FATAL] [$1]\e[0m"
+}
+
+set -e
+# 开启集群外部pki安全认证
+# 外部的意思在本篇就是使用 etcdtl来访问，etcdctl 就是外部客户端。如果k8s的apiserver访问etcd，那么apiserver就是客户端
+function createRootCA () {
+    if [ -f ./ssl/ca.csr ];then
+	printError "已存在ROOTCA"
+        exit 0
+    fi
+     
+    if [[ ! -f ca.csr && ! -f ca.pem && ! -f ca-key.pem ]];then
+        printInfo "开始生成ca证书"
+        cfssl gencert -initca ./json/ca-csr.json | cfssljson -bare ca
+    else
+        printError "已有CA"
+        exit 0
+    fi
+    #mkdir ssl/ &>/dev/null
+    # 只需要将ca.pem发给其他node节点即可
+
+    if [[ ! -f ssl/ca.csr && ! -f ssl/ca.crt && ! -f ssl/ca-key.crt ]];then
+        #cp ca.csr ca-key.pem ca.pem ssl/
+        for reNameCa in `ls ca*.pem`
+        do
+            mv $reNameCa ${reNameCa%%.pem}.crt
+         done
+     fi
+            mv ca* ssl/
+}
+
+function createDomainRootCA () {
+    if [ -f ./domain-ssl/domain-ca.csr ];then
+        printError "已存在domain-ca.csr"
+        exit 0
+    fi
+    if [[ ! -f domain-ca.csr && ! -f domain-ca.pem && ! -f domain-ca-key.pem ]];then
+        printInfo "开始生成domain-ca证书"
+        cfssl gencert -initca ./json/domain-csr.json | cfssljson -bare domain-ca
+    else
+        printError "已有CA"
+        exit 0
+    fi
+ 
+    if [ ! -d domain-ssl/ ];then
+        mkdir domain-ssl/ &>/dev/null
+    fi
+
+    # 只需要将ca.pem发给其他node节点即可
+    if [[ ! -f domain-ssl/domain-ca.csr && ! -f domain-ssl/domain-ca.crt && ! -f domain-ssl/domain-ca-key.crt ]];then
+        #cp ca.csr ca-key.pem ca.pem ssl/
+        for domainCa in `ls domain-ca*.pem`
+        do
+            mv $domainCa ${domainCa%%.pem}.crt
+         done
+     fi
+            mv domain-ca* domain-ssl/
+	    chmod -R 400 domain-ssl/*
+}
+
+function createExtendPeer () {
+    if [[ ! -f peer${peerIDS}.pem || ! -f peer${peerIDS}.crt ]];then
+        sed -i "s#%node4_ip%#$peerIpaddr#g" json/peer-${peerIDS}-csr.json
+        #cfssl gencert -ca=./ssl/ca.crt -ca-key=./ssl/ca-key.crt -config=./json/ca-config.json -profile=peer ./json/peer-${1}-csr.json | cfssljson -bare peer${1}
+        cfssl gencert -ca=./ssl/ca.crt -ca-key=./ssl/ca-key.crt -config=./json/ca-config.json -profile=peer ./json/peer-${peerIDS}-csr.json | cfssljson -bare peer${peerIDS}
+        local peers
+        printInfo "将peer${peerIDS}.pem改名为peer${peerIDS}.crt"
+        if [ ! -f peer$1.crt ];then
+            mv peer${peerIDS}.pem peer${peerIDS}.crt
+        fi
+        if [ ! -f peer${peerIDS}-key.crt ];then
+            mv peer${peerIDS}-key.pem peer${peerIDS}-key.crt
+        fi
+    fi
+}
+
+function movePeerCert () {
+    if [ ! -f ssl/peer${peerIDS}.crt ];then
+	mv peer${peerIDS}.crt ssl/
+    fi
+    if [ ! -f ssl/peer${peerIDS}-key.crt ];then
+	mv peer${peerIDS}-key.crt ssl/
+    fi
+    if [ ! -f ssl/peer${peerIDS}.csr ];then
+	mv peer${peerIDS}.csr ssl/
+    fi
+}
+
+function createClientCertNoIpBind () {
+    if [ ! -f ssl/clientNotBind.crt ];then
+        printInfo "开始生成客户端证书,无ip绑定"
+        cfssl gencert -ca=./ssl/ca.crt -ca-key=./ssl/ca-key.crt -config=./json/ca-config.json -profile=client ./json/clientNoHost.json | cfssljson -bare clientNotBind
+        for clientNot in `ls clientNotBind*.pem`
+        do
+            mv $clientNot ${clientNot%%.pem}.crt
+        done
+        printInfo "移动client证书到ssl/"
+        mv clientNotBind* ssl/
+        printInfo "客户端证书生成成功"
+fi
+}
+
+function createClientCertIpBind () {
+    if [ ! -f ssl/clientBind.crt ];then
+        printInfo "开始生成客户端证书,ip绑定"
+        cfssl gencert -ca=./ssl/ca.crt -ca-key=./ssl/ca-key.crt -config=./json/ca-config.json -profile=client ./json/client-template-temp.json | cfssljson -bare clientBind
+        for clients in `ls clientBind*.pem`
+        do
+            mv $clients ${clients%%.pem}.crt
+        done
+        printInfo "移动client证书到ssl/"
+        mv clientBind* ssl/
+        printInfo "客户端证书生成成功"
+fi
+}
+function createServerCertIpBind () {
+    if [ ! -f ssl/server${serverIds}.crt ];then
+        printInfo "开始生成扩展服务端证书,IP绑定"
+        cfssl gencert -ca=./ssl/ca.crt -ca-key=./ssl/ca-key.crt -config=./json/ca-config.json -profile=server ./json/server-${serverIds}-temp-csr.json | cfssljson -bare server${serverIds}
+        for tempServers in `ls server${serverIds}*.pem`
+        do
+            mv ${tempServers} ${tempServers%%.pem}.crt
+        done
+        printInfo "移动server${serverIds}证书到ssl/"
+        mv server${serverIds}* ssl/
+        printInfo "server${serverIds}服务器证书生成成功,Host--bind-->$serverIPaddrs"
+else
+    printError "已存在ssl/server${serverIds}.crt"
+    exit 0
+fi
+}
+
+function createDomainCertBind () {
+    
+    if [ ! -f domain-ssl/${serverDomain}.crt ];then
+        printInfo "开始生成扩展服务端证书,IP绑定"
+        cfssl gencert -ca=./domain-ssl/domain-ca.crt -ca-key=./domain-ssl/domain-ca-key.crt -config=./json/domain-config.json -profile=www ./json/domain-${serverDomain}-csr.json | cfssljson -bare ${serverDomain}
+        #for tempDomains in `ls ${serverDomain}*.pem`
+        #do
+        #    mv ${tempDomains} ${tempDomains%%.pem}.crt
+        #done
+        printInfo "移动${tempDomains}证书到domain-ssl/"
+        mv ${serverDomain}* domain-ssl/
+        printInfo "${serverDomain}服务器证书生成成功,Host--bind-->$serverDomain"
+else
+	printError "已存在domain-ssl/${serverDomain}.crt"
+        exit 0
+fi
+}
+
+function help () {
+    printInfo "./$0 -A 注意需要根据../bin/globalClusterInfo.sh预置变量进行生成所有CA/Server/Peer/Client/Client证书"
+    printInfo "./$0 -C 生成ROOTCA证书"
+    printInfo "./$0 -D 生成DOMAINROOTCA证书"
+    printInfo "./$0 -s servername -K 生成web服务端证书"
+    printInfo "./$0 -s servername -F nginxCert路径【绝对】生成HTTPS Nginx配置 http自动跳转HTTPS"
+    printInfo "./$0 -a peer-id-num -b peerHostIpaddr -c 生成单独的peer证书"
+    printInfo "./$0 -L 清理证书,清理前会备份ssl到/opt/下"
+    printInfo "./$0 -N 生成客户端证书,无IP绑定"
+    printInfo "./$0 -B client-IP 生成客户端证书,IP绑定"
+    printInfo "./$0 -S server-IP -I server_id -G 生成单独扩展服务端证书,IP绑定"
+    printInfo "./$0 -P 检查所有证书绑定的HOST"
+    
+}
+while getopts ":a:b:cACDGNLKPd:B:e:F:s:S:f:I:g:hi:j:k:--help" OPTS
+do
+    case $OPTS in
+A)
+    createRootCA
+    createThreeEtcdServerCert
+    createClientCert
+    moveCertToSslPath
+;;
+a)
+    peerIDS=${OPTARG}
+    cp json/peer-template-csr.json json/peer-${peerIDS}-csr.json
+    sed -i "s/%peerIDS%/${peerIDS}/g" json/peer-${peerIDS}-csr.json
+;;
+b)
+    peerIpaddr=${OPTARG}
+    sed -i "s/%peerIPaddr%/${peerIpaddr}/g" json/peer-${peerIDS}-csr.json
+;;
+
+c)
+    if [ -f ssl/peer${peerIDS}.crt ];then
+        printInfo "peer${peerIDS}.crt已经存在"
+        exit 0
+    fi
+    if [  -f ssl/ca.crt ];then
+        createExtendPeer
+        movePeerCert
+else
+	printError "CA证书呢?"
+        exit 0
+    fi
+    checkPeerIpaddr=`cfssl-certinfo -cert ssl/peer${peerIDS}.crt  | jq '.sans[0]'  | tr -d '"'`
+    if [[ "X$checkPeerIpaddr" == "X$peerIpaddr" ]];then
+	printInfo "恭喜peer${peerIDS}证书生成成功"
+    else
+	printError "peer${peerIDS}证书生成失败,证书IP地址有误"
+    fi
+    rm -f json/peer-${peerIDS}-csr.json
+;;
+C)
+    createRootCA
+;;
+D)
+    createDomainRootCA
+;;
+N)
+    createClientCertNoIpBind
+;;
+
+B)
+    clientsAddr=${OPTARG}
+    cp json/client-template.json json/client-template-temp.json
+    sed -i "s/%clientIP%/${clientsAddr}/g" json/client-template-temp.json
+    createClientCertIpBind
+;;
+I)
+    serverIds=${OPTARG}
+    #cp json/server-template-csr.json json/server-${serverIds}-temp-csr.json
+    #sed -i "s#%clusterIDS%#$serverIds#g" json/server-${serverIds}-temp-csr.json
+;;
+S)
+    serverIPaddrs=${OPTARG}
+    #sed -i "s#%clusterIPaddr%#$serverIPaddrs#g" json/server-${serverIds}-temp-csr.json
+;;
+s)
+    serverDomain=${OPTARG}
+    if [ -z $serverDomain ];then
+	printError "域名不能为空"
+        exit 0
+    fi
+    if [ ! -f ./domain-ssl/domain-ca.crt ];then
+	printError "domain-ca.crt不存在"
+	printError "请先使用sh $0 -D生成证书"
+        exit 0
+    fi
+;;
+G)
+    cp json/server-template-csr.json json/server-${serverIds}-temp-csr.json
+    sed -i "s#%clusterIDS%#$serverIds#g" json/server-${serverIds}-temp-csr.json
+    sed -i "s#%clusterIPaddr%#$serverIPaddrs#g" json/server-${serverIds}-temp-csr.json
+    createServerCertIpBind
+    rm -f json/server-${serverIds}-temp-csr.json
+;;
+K)
+        cp json/domain-template-csr.json json/domain-${serverDomain}-csr.json
+        sed -i "s#%servername%#${serverDomain}#g" json/domain-${serverDomain}-csr.json
+	createDomainCertBind
+        rm -f json/domain-${serverDomain}-csr.json
+;;
+P)
+    # 打印所有证书绑定的HOSTIP
+	yum -y install jq &>/dev/null
+	
+    for xj in `ls ssl/*.crt| grep -v 'key'`
+    do 
+        echo "`echo -e "\e[32m[证书名称]: \e[0m"` `echo -e "\e[34m[$xj]\e[0m"` `echo -e "\t\t\t\e[31m--->\e[0m"` `echo -e "\e[33mbindingHost\e[0m"` `echo -e "\e[31m--->\e[0m"` `cfssl-certinfo -cert ${xj} 2>/dev/null | jq '.sans[0]' 2>/dev/null | xargs -I {} echo -e "\e[32m{}\e[0m"`"
+    done
+    for xjj in `ls domain-ssl/*.pem | grep -v 'key'`
+    do
+        echo "`echo -e "\e[32m[证书名称]: \e[0m"` `echo -e "\e[34m[$xjj]\e[0m"` `echo -e "\t\t\t\e[31m--->\e[0m"` `echo -e "\e[33mbindingHost\e[0m"` `echo -e "\e[31m--->\e[0m"` `cfssl-certinfo -cert $xjj 2>/dev/null | jq '.sans[0]' 2>/dev/null | xargs -I {} echo -e "\e[32m{}\e[0m"`"
+    done
+    for xjjj in `ls domain-ssl/*.crt | grep -v 'key'`
+    do
+        echo "`echo -e "\e[32m[证书名称]: \e[0m"` `echo -e "\e[34m[$xjjj]\e[0m"` `echo -e "\t\t\t\e[31m--->\e[0m"` `echo -e "\e[33mbindingHost\e[0m"` `echo -e "\e[31m--->\e[0m"` `cfssl-certinfo -cert $xjjj 2>/dev/null | jq '.sans[0]' 2>/dev/null | xargs -I {} echo -e "\e[32m{}\e[0m"`"
+    done
+;;
+
+F)
+    certPath=${OPTARG}
+    if [[ "X$certPath" == "X" ]];then
+        printError "certPath not null"
+    fi
+    
+    if [ -f nginx/${serverDomain}.conf ];then
+	printWarning "${serverDomain}.conf已存在"
+    else 
+        printInfo "cp nginx/nginx-template.conf nginx/${serverDomain}.conf"
+        cp nginx/nginx-template.conf nginx/${serverDomain}.conf
+    fi
+   
+    if [ ! -d ${certPath} ];then
+        printInfo "创建${certPath}"
+	mkdir -pv ${certPath}
+    fi
+    if [ ! -f domain-ssl/${serverDomain}.pem ];then
+        printError "no domain-ssl/${serverDomain}.pem"
+	exit 0
+    else
+	if [[ ! -f ${certPath}/${serverDomain}.pem ]];then
+	    echo $certPath
+            cp domain-ssl/${serverDomain}.pem ${certPath}/
+            chmod 400 ${certPath}/${serverDomain}.pem
+	fi
+    fi
+
+
+    if [[ -f domain-ssl/${serverDomain}-key.pem ]];then
+        if [[ ! -f ${certPath}/${serverDomain}-key.pem ]];then
+            cp domain-ssl/${serverDomain}-key.pem ${certPath}/${serverDomain}-key.pem
+            chmod 400 ${certPath}/${serverDomain}-key.pem
+        fi
+    else
+        printError "No domain-ssl/${serverDomain}-key.pem"
+        exit 0
+    fi
+
+    sed -i "s#%certpath%#${certPath}#g" nginx/${serverDomain}.conf
+    sed -i "s#%certkeyname%#${serverDomain}-key.pem#g" nginx/${serverDomain}.conf
+    sed -i "s#%certname%#${serverDomain}.pem#g" nginx/${serverDomain}.conf
+    sed -i "s#%servername%#${serverDomain}#g" nginx/${serverDomain}.conf
+;;
+L)
+   for tempTime in `seq 10 | sort -nrk 1`
+   do
+       printError "${tempTime}秒后清理所有证书"
+       printWarning "终止清理请按ctrl + c"
+       sleep 1
+   done  
+   wait $$
+   rm -rf ca*
+   cp -r ssl/ /opt/$(date +%Y%m%d%H%M%S)_cert
+   rm -rf ssl/*
+   rm -rf server*
+   rm -rf client*
+   rm -rf peer* 
+;;
+.*)
+   help
+;;
+h)
+   help
+;;
+--help)
+	help
+;;
+esac
+done 
+#[root@node1 json]# mv serverName-template-csr.json domain-template-csr.json
+#[root@node1 json]# vim domain-config.json

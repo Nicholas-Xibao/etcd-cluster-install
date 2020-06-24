@@ -1,0 +1,19 @@
+{
+    "CN": "ETCD-Cluster-2",
+    "hosts": [
+      "172.17.174.36"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "Beijing",
+            "L": "Beijing",
+            "O": "etcd",
+            "OU": "System"
+        }
+    ]
+}

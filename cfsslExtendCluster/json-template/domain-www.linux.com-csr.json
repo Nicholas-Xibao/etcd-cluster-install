@@ -1,0 +1,19 @@
+{
+    "CN": "www.linux.com",
+    "hosts": [
+      "www.linux.com"
+    ],
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "CN",
+            "ST": "Beijing",
+            "L": "Beijing",
+            "O": "www.linux.com",
+            "OU": "System"
+        }
+    ]
+}
